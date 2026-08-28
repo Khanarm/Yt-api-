@@ -1,0 +1,13 @@
+aiogram==3.14.0
+motor==3.6.0
+pymongo==4.10.1
+fastapi==0.115.0
+uvicorn[standard]==0.31.0
+pydantic==2.9.2
+pydantic-settings==2.5.0
+yt-dlp==2024.9.27
+python-dotenv==1.0.1
+aiofiles==24.1.0
+cryptography==43.0.1
+requests==2.32.3
+slowapi==0.1.9
