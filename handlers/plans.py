@@ -13,15 +13,67 @@ from database import db
 router = Router()
 
 
+# ==========================================
+# DEFAULT PLANS
+# ==========================================
+
+DEFAULT_PLANS = [
+    {
+        "plan_id": "7days",
+        "name": "7 Days",
+        "price": 49,
+        "duration_days": 7,
+        "status": "active"
+    },
+    {
+        "plan_id": "30days",
+        "name": "30 Days",
+        "price": 149,
+        "duration_days": 30,
+        "status": "active"
+    },
+    {
+        "plan_id": "90days",
+        "name": "90 Days",
+        "price": 349,
+        "duration_days": 90,
+        "status": "active"
+    },
+    {
+        "plan_id": "365days",
+        "name": "365 Days",
+        "price": 999,
+        "duration_days": 365,
+        "status": "active"
+    }
+]
+
+
+# ==========================================
+# GET PLANS KEYBOARD
+# ==========================================
+
 async def get_plans_keyboard():
 
-    cursor = db.db.plans.find({
-        "status": "active"
-    })
+    plans = []
 
-    plans = await cursor.to_list(
-        length=10
-    )
+    try:
+        cursor = db.db.plans.find({
+            "status": "active"
+        })
+
+        plans = await cursor.to_list(length=10)
+
+    except Exception as e:
+        print(f"Plans database error: {e}")
+
+    # --------------------------------------
+    # If MongoDB has no plans
+    # use default plans
+    # --------------------------------------
+
+    if not plans:
+        plans = DEFAULT_PLANS
 
     keyboard = []
 
@@ -52,6 +104,10 @@ async def get_plans_keyboard():
     )
 
 
+# ==========================================
+# /PLANS
+# ==========================================
+
 @router.message(Command("plans"))
 async def cmd_plans(message: Message):
 
@@ -64,6 +120,10 @@ async def cmd_plans(message: Message):
         parse_mode="HTML"
     )
 
+
+# ==========================================
+# MENU → PLANS
+# ==========================================
 
 @router.callback_query(
     F.data == "menu_plans"
