@@ -6,41 +6,43 @@ from aiogram.types import (
     InlineKeyboardButton
 )
 from aiogram.filters import Command
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
 
 from database import db
 from services.api_keys import APIKeyService
 from services.payment import PaymentService
 from config import settings
+from utils.logger import logger
 
 
 router = Router()
 
 
-class PaymentStates(StatesGroup):
-    waiting_for_utr = State()
-
-
-# ==========================================
+# ==========================================================
 # MY STATS
-# ==========================================
+# ==========================================================
 
 @router.message(Command("mystats"))
 async def cmd_mystats(message: Message):
+
     await show_user_stats(
-        message.from_user.id,
-        message
+        user_id=message.from_user.id,
+        message=message
     )
 
 
-@router.callback_query(F.data == "menu_mystats")
-async def callback_mystats(callback: CallbackQuery):
+@router.callback_query(
+    F.data == "menu_mystats"
+)
+async def callback_mystats(
+    callback: CallbackQuery
+):
+
     await show_user_stats(
-        callback.from_user.id,
-        callback.message,
+        user_id=callback.from_user.id,
+        message=callback.message,
         edit=True
     )
+
     await callback.answer()
 
 
@@ -50,60 +52,189 @@ async def show_user_stats(
     edit: bool = False
 ):
 
-    key_doc = await APIKeyService.get_active_key_info(
-        user_id
-    )
+    try:
+
+        key_doc = await APIKeyService.get_active_key_info(
+            user_id
+        )
+
+    except Exception as e:
+
+        logger.error(
+            f"Failed to get API stats for "
+            f"user={user_id}: {e}",
+            exc_info=True
+        )
+
+        text = (
+            "❌ <b>Unable to load your stats.</b>\n\n"
+            "Please try again later."
+        )
+
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="🔙 Back to Menu",
+                        callback_data="menu_home"
+                    )
+                ]
+            ]
+        )
+
+        if edit:
+            await message.edit_text(
+                text,
+                reply_markup=keyboard,
+                parse_mode="HTML"
+            )
+        else:
+            await message.answer(
+                text,
+                reply_markup=keyboard,
+                parse_mode="HTML"
+            )
+
+        return
 
     if not key_doc:
+
         text = (
             "📊 <b>No Active Subscription</b>\n\n"
-            "Purchase a plan using /plans."
+            "You don't have an active API subscription.\n\n"
+            "Purchase a plan to get your API key."
+        )
+
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="💎 View Plans",
+                        callback_data="menu_plans"
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="🔙 Back to Menu",
+                        callback_data="menu_home"
+                    )
+                ]
+            ]
         )
 
     else:
-        used = key_doc["requests_used"]
-        limit = key_doc["request_limit"]
+
+        used = int(
+            key_doc.get(
+                "requests_used",
+                0
+            )
+        )
+
+        limit = int(
+            key_doc.get(
+                "request_limit",
+                0
+            )
+        )
 
         remaining = max(
             0,
             limit - used
         )
 
-        expires = key_doc[
+        expires_at = key_doc.get(
             "expires_at"
-        ].strftime(
-            "%Y-%m-%d %H:%M:%S UTC"
+        )
+
+        if expires_at:
+
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(
+                    tzinfo=__import__(
+                        "datetime"
+                    ).timezone.utc
+                )
+
+            expires = expires_at.strftime(
+                "%Y-%m-%d %H:%M:%S UTC"
+            )
+
+        else:
+
+            expires = "Unknown"
+
+        plan_id = str(
+            key_doc.get(
+                "plan_id",
+                "unknown"
+            )
+        )
+
+        status = str(
+            key_doc.get(
+                "status",
+                "unknown"
+            )
         )
 
         text = (
             "📊 <b>Your API Usage</b>\n\n"
+
             f"💎 Plan: "
-            f"<code>{key_doc['plan_id'].upper()}</code>\n"
-            f"📈 Used: <code>{used}</code>\n"
-            f"📉 Remaining: <code>{remaining}</code>\n"
-            f"⏳ Expiry: <code>{expires}</code>\n"
+            f"<code>{plan_id.upper()}</code>\n"
+
+            f"📈 Used: "
+            f"<code>{used}</code>\n"
+
+            f"📉 Remaining: "
+            f"<code>{remaining}</code>\n"
+
+            f"📊 Limit: "
+            f"<code>{limit}</code>\n"
+
+            f"⏳ Expiry: "
+            f"<code>{expires}</code>\n"
+
             f"🔒 Status: "
-            f"<b>{key_doc['status'].upper()}</b>"
+            f"<b>{status.upper()}</b>"
         )
 
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="🔙 Back to Menu",
-                    callback_data="menu_home"
-                )
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="🔄 Renew / Upgrade",
+                        callback_data="menu_renew"
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="🔙 Back to Menu",
+                        callback_data="menu_home"
+                    )
+                ]
             ]
-        ]
-    )
+        )
 
     if edit:
-        await message.edit_text(
-            text,
-            reply_markup=keyboard,
-            parse_mode="HTML"
-        )
+
+        try:
+
+            await message.edit_text(
+                text,
+                reply_markup=keyboard,
+                parse_mode="HTML"
+            )
+
+        except Exception as e:
+
+            logger.warning(
+                f"Could not edit stats message: {e}"
+            )
+
     else:
+
         await message.answer(
             text,
             reply_markup=keyboard,
@@ -111,15 +242,18 @@ async def show_user_stats(
         )
 
 
-# ==========================================
+# ==========================================================
 # RENEW
-# ==========================================
+# ==========================================================
 
 @router.message(Command("renew"))
-async def cmd_renew(message: Message):
+async def cmd_renew(
+    message: Message
+):
 
     await message.answer(
-        "💎 Select a plan to renew or upgrade:",
+        "💎 <b>Renew / Upgrade</b>\n\n"
+        "Choose a plan:",
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
                 [
@@ -127,17 +261,29 @@ async def cmd_renew(message: Message):
                         text="💎 View Plans",
                         callback_data="menu_plans"
                     )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="🔙 Back to Menu",
+                        callback_data="menu_home"
+                    )
                 ]
             ]
-        )
+        ),
+        parse_mode="HTML"
     )
 
 
-@router.callback_query(F.data == "menu_renew")
-async def callback_renew(callback: CallbackQuery):
+@router.callback_query(
+    F.data == "menu_renew"
+)
+async def callback_renew(
+    callback: CallbackQuery
+):
 
     await callback.message.edit_text(
-        "💎 Select a plan to renew or upgrade:",
+        "💎 <b>Renew / Upgrade</b>\n\n"
+        "Choose a plan:",
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
                 [
@@ -145,27 +291,37 @@ async def callback_renew(callback: CallbackQuery):
                         text="💎 View Plans",
                         callback_data="menu_plans"
                     )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="🔙 Back to Menu",
+                        callback_data="menu_home"
+                    )
                 ]
             ]
-        )
+        ),
+        parse_mode="HTML"
     )
 
     await callback.answer()
 
 
-# ==========================================
+# ==========================================================
 # DOCUMENTATION
-# ==========================================
+# ==========================================================
 
 @router.message(Command("docs"))
-async def cmd_docs(message: Message):
+async def cmd_docs(
+    message: Message
+):
 
     await message.answer(
         f"📚 <b>Music API Documentation</b>\n\n"
-        f"Base URL:\n"
+
+        f"<b>Base URL:</b>\n"
         f"<code>{settings.API_BASE_URL}</code>\n\n"
 
-        f"<b>Audio</b>\n"
+        f"<b>🎵 Audio:</b>\n"
         f"<code>"
         f"{settings.API_BASE_URL}"
         f"/download?url=VIDEO_ID"
@@ -173,28 +329,33 @@ async def cmd_docs(message: Message):
         f"&api_key=YOUR_KEY"
         f"</code>\n\n"
 
-        f"<b>Video</b>\n"
+        f"<b>🎬 Video:</b>\n"
         f"<code>"
         f"{settings.API_BASE_URL}"
         f"/download?url=VIDEO_ID"
         f"&type=video"
         f"&api_key=YOUR_KEY"
-        f"</code>",
+        f"</code>\n\n"
+
+        "🔐 Keep your API key private.",
         parse_mode="HTML"
     )
 
 
-@router.callback_query(F.data == "menu_docs")
+@router.callback_query(
+    F.data == "menu_docs"
+)
 async def callback_docs(
     callback: CallbackQuery
 ):
 
     await callback.message.edit_text(
         f"📚 <b>Music API Documentation</b>\n\n"
-        f"Base URL:\n"
+
+        f"<b>Base URL:</b>\n"
         f"<code>{settings.API_BASE_URL}</code>\n\n"
 
-        f"<b>Audio:</b>\n"
+        f"<b>🎵 Audio:</b>\n"
         f"<code>"
         f"{settings.API_BASE_URL}"
         f"/download?url=VIDEO_ID"
@@ -202,13 +363,15 @@ async def callback_docs(
         f"&api_key=YOUR_KEY"
         f"</code>\n\n"
 
-        f"<b>Video:</b>\n"
+        f"<b>🎬 Video:</b>\n"
         f"<code>"
         f"{settings.API_BASE_URL}"
         f"/download?url=VIDEO_ID"
         f"&type=video"
         f"&api_key=YOUR_KEY"
-        f"</code>",
+        f"</code>\n\n"
+
+        "🔐 Keep your API key private.",
 
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
@@ -227,30 +390,43 @@ async def callback_docs(
     await callback.answer()
 
 
-# ==========================================
+# ==========================================================
 # SUPPORT
-# ==========================================
+# ==========================================================
 
 @router.message(Command("support"))
-async def cmd_support(message: Message):
+async def cmd_support(
+    message: Message
+):
 
     await message.answer(
         f"🆘 <b>Support Center</b>\n\n"
-        f"Channel: {settings.SUPPORT_CHANNEL}\n"
-        f"Group: {settings.SUPPORT_GROUP}",
+
+        f"📢 Channel:\n"
+        f"{settings.SUPPORT_CHANNEL}\n\n"
+
+        f"👥 Group:\n"
+        f"{settings.SUPPORT_GROUP}",
+
         parse_mode="HTML"
     )
 
 
-@router.callback_query(F.data == "menu_support")
+@router.callback_query(
+    F.data == "menu_support"
+)
 async def callback_support(
     callback: CallbackQuery
 ):
 
     await callback.message.edit_text(
         f"🆘 <b>Support Center</b>\n\n"
-        f"Channel: {settings.SUPPORT_CHANNEL}\n"
-        f"Group: {settings.SUPPORT_GROUP}",
+
+        f"📢 Channel:\n"
+        f"{settings.SUPPORT_CHANNEL}\n\n"
+
+        f"👥 Group:\n"
+        f"{settings.SUPPORT_GROUP}",
 
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
@@ -269,9 +445,9 @@ async def callback_support(
     await callback.answer()
 
 
-# ==========================================
+# ==========================================================
 # BUY PLAN
-# ==========================================
+# ==========================================================
 
 @router.callback_query(
     F.data.startswith("buy_plan_")
@@ -289,37 +465,88 @@ async def callback_buy_plan(
     user_id = callback.from_user.id
 
     await callback.answer(
-        "Creating secure payment QR..."
+        "Creating payment link..."
     )
 
     try:
 
+        # ------------------------------------------
+        # Check plan exists
+        # ------------------------------------------
+
+        plan = await db.db.plans.find_one({
+            "plan_id": plan_id,
+            "status": "active"
+        })
+
+        if not plan:
+
+            await callback.message.answer(
+                "❌ <b>Plan not found.</b>\n\n"
+                "Please open /plans again.",
+                parse_mode="HTML"
+            )
+
+            return
+
+        # ------------------------------------------
+        # Create Razorpay UPI Payment Link
+        # ------------------------------------------
+
         payment_info = (
             await PaymentService.create_payment_order(
-                user_id,
-                plan_id
+                user_id=user_id,
+                plan_id=plan_id
             )
         )
 
-        caption = (
+        payment_url = payment_info.get(
+            "payment_url"
+        )
+
+        if not payment_url:
+
+            raise ValueError(
+                "Payment URL was not returned."
+            )
+
+        amount = payment_info.get(
+            "amount",
+            plan["price"]
+        )
+
+        # ------------------------------------------
+        # Payment message
+        # ------------------------------------------
+
+        text = (
             "💳 <b>Payment Required</b>\n\n"
+
+            f"💎 Plan: "
+            f"<b>{plan['name']}</b>\n"
+
             f"💰 Amount: "
-            f"<b>₹{payment_info['amount']}</b>\n\n"
+            f"<b>₹{amount}</b>\n\n"
 
-            "📱 Scan the QR code using "
-            "any supported UPI app.\n\n"
+            "👇 Tap <b>Pay Now</b> to complete "
+            "your payment.\n\n"
 
-            "1️⃣ Scan QR\n"
-            "2️⃣ Pay the exact amount\n"
-            "3️⃣ Tap <b>Verify Payment</b>\n"
-            "4️⃣ Send your UTR / UPI Transaction ID\n\n"
+            "After completing the payment, "
+            "come back here and tap "
+            "<b>Verify Payment</b>.\n\n"
 
-            "⚠️ This QR is for this payment only.\n"
-            "⏱ QR expires in about 30 minutes."
+            "⚠️ Please pay the exact amount.\n"
+            "⏱ Payment link expires in about 30 minutes."
         )
 
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=f"💳 Pay ₹{amount}",
+                        url=payment_url
+                    )
+                ],
                 [
                     InlineKeyboardButton(
                         text="✅ Verify Payment",
@@ -338,32 +565,38 @@ async def callback_buy_plan(
             ]
         )
 
-        await callback.message.answer_photo(
-            photo=payment_info["image_url"],
-            caption=caption,
+        await callback.message.answer(
+            text,
             reply_markup=keyboard,
             parse_mode="HTML"
         )
 
     except Exception as e:
 
+        logger.error(
+            f"Payment Link creation failed | "
+            f"user={user_id} | "
+            f"plan={plan_id} | "
+            f"error={e}",
+            exc_info=True
+        )
+
         await callback.message.answer(
-            "❌ <b>Unable to create payment QR.</b>\n\n"
+            "❌ <b>Unable to create payment link.</b>\n\n"
             "Please try again later.",
             parse_mode="HTML"
         )
 
 
-# ==========================================
-# VERIFY BUTTON
-# ==========================================
+# ==========================================================
+# VERIFY PAYMENT
+# ==========================================================
 
 @router.callback_query(
     F.data.startswith("verify_payment_")
 )
 async def callback_verify_payment(
-    callback: CallbackQuery,
-    state: FSMContext
+    callback: CallbackQuery
 ):
 
     payment_id = callback.data.replace(
@@ -374,6 +607,14 @@ async def callback_verify_payment(
 
     user_id = callback.from_user.id
 
+    await callback.answer(
+        "Checking payment..."
+    )
+
+    # ------------------------------------------
+    # Find pending payment
+    # ------------------------------------------
+
     payment = await db.db.payments.find_one({
         "payment_id": payment_id,
         "user_id": user_id,
@@ -382,90 +623,40 @@ async def callback_verify_payment(
 
     if not payment:
 
-        await callback.answer(
-            "Payment order not found or already processed.",
-            show_alert=True
-        )
+        # Check if already completed
+        completed = await db.db.payments.find_one({
+            "payment_id": payment_id,
+            "user_id": user_id,
+            "status": "completed"
+        })
+
+        if completed:
+
+            await callback.message.answer(
+                "✅ <b>This payment is already verified.</b>\n\n"
+                "If you already received your API key, "
+                "you can use it normally.",
+                parse_mode="HTML"
+            )
+
+        else:
+
+            await callback.message.answer(
+                "❌ <b>Payment order not found.</b>\n\n"
+                "Please create a new payment from /plans.",
+                parse_mode="HTML"
+            )
 
         return
 
-    # Store payment ID in FSM
-    await state.update_data(
-        payment_id=payment_id
-    )
+    # ------------------------------------------
+    # Show checking message
+    # ------------------------------------------
 
-    await state.set_state(
-        PaymentStates.waiting_for_utr
-    )
-
-    await callback.message.answer(
-        "🔎 <b>Payment Verification</b>\n\n"
-        "Please send the <b>UTR / UPI Transaction ID</b> "
-        "you received after payment.\n\n"
-        "Example:\n"
-        "<code>123456789012</code>\n\n"
-        "⚠️ Do not send your UPI PIN or password.",
+    checking_message = await callback.message.answer(
+        "🔎 <b>Checking payment with Razorpay...</b>\n\n"
+        "Please wait...",
         parse_mode="HTML"
-    )
-
-    await callback.answer()
-
-
-# ==========================================
-# UTR MESSAGE
-# ==========================================
-
-@router.message(
-    PaymentStates.waiting_for_utr
-)
-async def receive_utr(
-    message: Message,
-    state: FSMContext
-):
-
-    utr = (
-        message.text or ""
-    ).strip()
-
-    if not utr:
-
-        await message.answer(
-            "❌ Please send a valid UTR / "
-            "UPI Transaction ID."
-        )
-
-        return
-
-    # Basic length protection
-    if len(utr) < 6 or len(utr) > 40:
-
-        await message.answer(
-            "❌ Invalid UTR format.\n\n"
-            "Please check your payment receipt "
-            "and send the correct UTR."
-        )
-
-        return
-
-    data = await state.get_data()
-
-    payment_id = data.get(
-        "payment_id"
-    )
-
-    if not payment_id:
-
-        await state.clear()
-
-        await message.answer(
-            "❌ Payment session expired. "
-            "Please create a new payment from /plans."
-        )
-
-        return
-
-    await message.answer(
-        "🔎 Checking your payment with Razorpay..."
     )
 
     try:
@@ -474,49 +665,167 @@ async def receive_utr(
             await PaymentService
             .verify_and_fulfill_payment(
                 payment_id=payment_id,
-                user_id=message.from_user.id,
-                utr=utr
+                user_id=user_id
             )
         )
 
-    except Exception:
+    except Exception as e:
 
-        await message.answer(
-            "❌ Payment verification service "
-            "temporarily unavailable.\n\n"
-            "Please try again."
+        logger.error(
+            f"Payment verification failed | "
+            f"payment={payment_id} | "
+            f"user={user_id} | "
+            f"error={e}",
+            exc_info=True
         )
 
-        return
-
-    if not result.get("success"):
-
-        await message.answer(
-            "❌ <b>Payment Not Verified</b>\n\n"
-            f"{result.get('message', 'Payment not found.')}\n\n"
-            "If you have just paid, wait a little and "
-            "try the same UTR again.",
+        await checking_message.edit_text(
+            "❌ <b>Payment verification failed.</b>\n\n"
+            "Razorpay could not be contacted right now.\n"
+            "Please try again after a few seconds.",
             parse_mode="HTML"
         )
 
         return
 
-    # Very important:
-    # Raw API key is shown only now.
-    raw_key = result.get("api_key")
+    # ------------------------------------------
+    # Payment NOT verified
+    # ------------------------------------------
 
-    await state.clear()
+    if not result.get("success"):
 
-    await message.answer(
+        await checking_message.edit_text(
+            "❌ <b>Payment Not Verified</b>\n\n"
+            f"{result.get(
+                'message',
+                'Payment has not been received yet.'
+            )}\n\n"
+            "If you have just completed the payment, "
+            "wait a few seconds and press "
+            "<b>Verify Payment</b> again.",
+            parse_mode="HTML"
+        )
+
+        return
+
+    # ------------------------------------------
+    # Already completed
+    # ------------------------------------------
+
+    if result.get("already_completed"):
+
+        await checking_message.edit_text(
+            "✅ <b>Payment Already Verified</b>\n\n"
+            "Your subscription has already been activated.\n\n"
+            "Use /mystats to check your API status.",
+            parse_mode="HTML"
+        )
+
+        return
+
+    # ------------------------------------------
+    # Get API key
+    # ------------------------------------------
+
+    raw_key = result.get(
+        "api_key"
+    )
+
+    if not raw_key:
+
+        logger.error(
+            f"Payment completed but API key missing | "
+            f"payment={payment_id} | "
+            f"user={user_id}"
+        )
+
+        await checking_message.edit_text(
+            "✅ <b>Payment Received</b>\n\n"
+            "Your payment was successful, but "
+            "the API key could not be generated automatically.\n\n"
+            "Please contact support.",
+            parse_mode="HTML"
+        )
+
+        return
+
+    # ------------------------------------------
+    # Success
+    # ------------------------------------------
+
+    await checking_message.edit_text(
         "🎉 <b>Payment Successful!</b>\n\n"
+
         "✅ Subscription activated.\n"
         "🔑 Your API key has been generated.\n\n"
 
         "<b>YOUR API KEY:</b>\n"
         f"<code>{raw_key}</code>\n\n"
 
-        "⚠️ <b>Save this key now.</b>\n"
-        "For security, the complete key will not "
-        "be stored in the database.",
+        "⚠️ <b>Important:</b>\n"
+        "Save this API key somewhere safe.\n\n"
+
+        "🔐 Do not share your API key publicly.",
         parse_mode="HTML"
     )
+
+    logger.info(
+        f"Subscription successfully activated | "
+        f"user={user_id} | "
+        f"payment={payment_id}"
+    )
+
+
+# ==========================================================
+# BACKUP: SHOW PLANS FROM ANY PAYMENT SCREEN
+# ==========================================================
+
+@router.callback_query(
+    F.data == "payment_back_plans"
+)
+async def payment_back_plans(
+    callback: CallbackQuery
+):
+
+    cursor = db.db.plans.find({
+        "status": "active"
+    })
+
+    plans = await cursor.to_list(
+        length=10
+    )
+
+    keyboard = []
+
+    for plan in plans:
+
+        keyboard.append([
+            InlineKeyboardButton(
+                text=(
+                    f"💎 {plan['name']} - "
+                    f"₹{plan['price']} / "
+                    f"{plan['duration_days']} Days"
+                ),
+                callback_data=(
+                    f"buy_plan_{plan['plan_id']}"
+                )
+            )
+        ])
+
+    keyboard.append([
+        InlineKeyboardButton(
+            text="🔙 Back to Menu",
+            callback_data="menu_home"
+        )
+    ])
+
+    await callback.message.edit_text(
+        "<b>💎 Music API Plans</b>\n\n"
+        "Choose your plan:",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=keyboard
+        ),
+        parse_mode="HTML"
+    )
+
+    await callback.answer()
