@@ -6,6 +6,7 @@ from aiogram.types import (
     InlineKeyboardButton
 )
 from aiogram.filters import Command
+from datetime import timezone
 
 from database import db
 from services.api_keys import APIKeyService
@@ -30,12 +31,8 @@ async def cmd_mystats(message: Message):
     )
 
 
-@router.callback_query(
-    F.data == "menu_mystats"
-)
-async def callback_mystats(
-    callback: CallbackQuery
-):
+@router.callback_query(F.data == "menu_mystats")
+async def callback_mystats(callback: CallbackQuery):
 
     await show_user_stats(
         user_id=callback.from_user.id,
@@ -53,7 +50,6 @@ async def show_user_stats(
 ):
 
     try:
-
         key_doc = await APIKeyService.get_active_key_info(
             user_id
         )
@@ -151,9 +147,7 @@ async def show_user_stats(
 
             if expires_at.tzinfo is None:
                 expires_at = expires_at.replace(
-                    tzinfo=__import__(
-                        "datetime"
-                    ).timezone.utc
+                    tzinfo=timezone.utc
                 )
 
             expires = expires_at.strftime(
@@ -180,22 +174,16 @@ async def show_user_stats(
 
         text = (
             "📊 <b>Your API Usage</b>\n\n"
-
             f"💎 Plan: "
             f"<code>{plan_id.upper()}</code>\n"
-
             f"📈 Used: "
             f"<code>{used}</code>\n"
-
             f"📉 Remaining: "
             f"<code>{remaining}</code>\n"
-
             f"📊 Limit: "
             f"<code>{limit}</code>\n"
-
             f"⏳ Expiry: "
             f"<code>{expires}</code>\n"
-
             f"🔒 Status: "
             f"<b>{status.upper()}</b>"
         )
@@ -247,9 +235,7 @@ async def show_user_stats(
 # ==========================================================
 
 @router.message(Command("renew"))
-async def cmd_renew(
-    message: Message
-):
+async def cmd_renew(message: Message):
 
     await message.answer(
         "💎 <b>Renew / Upgrade</b>\n\n"
@@ -274,12 +260,8 @@ async def cmd_renew(
     )
 
 
-@router.callback_query(
-    F.data == "menu_renew"
-)
-async def callback_renew(
-    callback: CallbackQuery
-):
+@router.callback_query(F.data == "menu_renew")
+async def callback_renew(callback: CallbackQuery):
 
     await callback.message.edit_text(
         "💎 <b>Renew / Upgrade</b>\n\n"
@@ -311,16 +293,12 @@ async def callback_renew(
 # ==========================================================
 
 @router.message(Command("docs"))
-async def cmd_docs(
-    message: Message
-):
+async def cmd_docs(message: Message):
 
     await message.answer(
         f"📚 <b>Music API Documentation</b>\n\n"
-
         f"<b>Base URL:</b>\n"
         f"<code>{settings.API_BASE_URL}</code>\n\n"
-
         f"<b>🎵 Audio:</b>\n"
         f"<code>"
         f"{settings.API_BASE_URL}"
@@ -328,7 +306,6 @@ async def cmd_docs(
         f"&type=audio"
         f"&api_key=YOUR_KEY"
         f"</code>\n\n"
-
         f"<b>🎬 Video:</b>\n"
         f"<code>"
         f"{settings.API_BASE_URL}"
@@ -336,25 +313,18 @@ async def cmd_docs(
         f"&type=video"
         f"&api_key=YOUR_KEY"
         f"</code>\n\n"
-
         "🔐 Keep your API key private.",
         parse_mode="HTML"
     )
 
 
-@router.callback_query(
-    F.data == "menu_docs"
-)
-async def callback_docs(
-    callback: CallbackQuery
-):
+@router.callback_query(F.data == "menu_docs")
+async def callback_docs(callback: CallbackQuery):
 
     await callback.message.edit_text(
         f"📚 <b>Music API Documentation</b>\n\n"
-
         f"<b>Base URL:</b>\n"
         f"<code>{settings.API_BASE_URL}</code>\n\n"
-
         f"<b>🎵 Audio:</b>\n"
         f"<code>"
         f"{settings.API_BASE_URL}"
@@ -362,7 +332,6 @@ async def callback_docs(
         f"&type=audio"
         f"&api_key=YOUR_KEY"
         f"</code>\n\n"
-
         f"<b>🎬 Video:</b>\n"
         f"<code>"
         f"{settings.API_BASE_URL}"
@@ -370,9 +339,7 @@ async def callback_docs(
         f"&type=video"
         f"&api_key=YOUR_KEY"
         f"</code>\n\n"
-
         "🔐 Keep your API key private.",
-
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
                 [
@@ -383,7 +350,6 @@ async def callback_docs(
                 ]
             ]
         ),
-
         parse_mode="HTML"
     )
 
@@ -395,39 +361,27 @@ async def callback_docs(
 # ==========================================================
 
 @router.message(Command("support"))
-async def cmd_support(
-    message: Message
-):
+async def cmd_support(message: Message):
 
     await message.answer(
         f"🆘 <b>Support Center</b>\n\n"
-
         f"📢 Channel:\n"
         f"{settings.SUPPORT_CHANNEL}\n\n"
-
         f"👥 Group:\n"
         f"{settings.SUPPORT_GROUP}",
-
         parse_mode="HTML"
     )
 
 
-@router.callback_query(
-    F.data == "menu_support"
-)
-async def callback_support(
-    callback: CallbackQuery
-):
+@router.callback_query(F.data == "menu_support")
+async def callback_support(callback: CallbackQuery):
 
     await callback.message.edit_text(
         f"🆘 <b>Support Center</b>\n\n"
-
         f"📢 Channel:\n"
         f"{settings.SUPPORT_CHANNEL}\n\n"
-
         f"👥 Group:\n"
         f"{settings.SUPPORT_GROUP}",
-
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
                 [
@@ -438,7 +392,6 @@ async def callback_support(
                 ]
             ]
         ),
-
         parse_mode="HTML"
     )
 
@@ -452,9 +405,7 @@ async def callback_support(
 @router.callback_query(
     F.data.startswith("buy_plan_")
 )
-async def callback_buy_plan(
-    callback: CallbackQuery
-):
+async def callback_buy_plan(callback: CallbackQuery):
 
     plan_id = callback.data.replace(
         "buy_plan_",
@@ -469,10 +420,6 @@ async def callback_buy_plan(
     )
 
     try:
-
-        # ------------------------------------------
-        # Check plan exists
-        # ------------------------------------------
 
         plan = await db.db.plans.find_one({
             "plan_id": plan_id,
@@ -489,10 +436,6 @@ async def callback_buy_plan(
 
             return
 
-        # ------------------------------------------
-        # Create Razorpay UPI Payment Link
-        # ------------------------------------------
-
         payment_info = (
             await PaymentService.create_payment_order(
                 user_id=user_id,
@@ -505,7 +448,6 @@ async def callback_buy_plan(
         )
 
         if not payment_url:
-
             raise ValueError(
                 "Payment URL was not returned."
             )
@@ -515,26 +457,17 @@ async def callback_buy_plan(
             plan["price"]
         )
 
-        # ------------------------------------------
-        # Payment message
-        # ------------------------------------------
-
         text = (
             "💳 <b>Payment Required</b>\n\n"
-
             f"💎 Plan: "
             f"<b>{plan['name']}</b>\n"
-
             f"💰 Amount: "
             f"<b>₹{amount}</b>\n\n"
-
             "👇 Tap <b>Pay Now</b> to complete "
             "your payment.\n\n"
-
             "After completing the payment, "
             "come back here and tap "
             "<b>Verify Payment</b>.\n\n"
-
             "⚠️ Please pay the exact amount.\n"
             "⏱ Payment link expires in about 30 minutes."
         )
@@ -611,10 +544,6 @@ async def callback_verify_payment(
         "Checking payment..."
     )
 
-    # ------------------------------------------
-    # Find pending payment
-    # ------------------------------------------
-
     payment = await db.db.payments.find_one({
         "payment_id": payment_id,
         "user_id": user_id,
@@ -623,7 +552,6 @@ async def callback_verify_payment(
 
     if not payment:
 
-        # Check if already completed
         completed = await db.db.payments.find_one({
             "payment_id": payment_id,
             "user_id": user_id,
@@ -649,10 +577,6 @@ async def callback_verify_payment(
 
         return
 
-    # ------------------------------------------
-    # Show checking message
-    # ------------------------------------------
-
     checking_message = await callback.message.answer(
         "🔎 <b>Checking payment with Razorpay...</b>\n\n"
         "Please wait...",
@@ -661,12 +585,9 @@ async def callback_verify_payment(
 
     try:
 
-        result = (
-            await PaymentService
-            .verify_and_fulfill_payment(
-                payment_id=payment_id,
-                user_id=user_id
-            )
+        result = await PaymentService.verify_and_fulfill_payment(
+            payment_id=payment_id,
+            user_id=user_id
         )
 
     except Exception as e:
@@ -688,18 +609,20 @@ async def callback_verify_payment(
 
         return
 
-    # ------------------------------------------
-    # Payment NOT verified
-    # ------------------------------------------
+    # ------------------------------------------------------
+    # PAYMENT NOT VERIFIED
+    # ------------------------------------------------------
 
     if not result.get("success"):
 
+        error_message = result.get(
+            "message",
+            "Payment has not been received yet."
+        )
+
         await checking_message.edit_text(
             "❌ <b>Payment Not Verified</b>\n\n"
-            f"{result.get(
-                'message',
-                'Payment has not been received yet.'
-            )}\n\n"
+            f"{error_message}\n\n"
             "If you have just completed the payment, "
             "wait a few seconds and press "
             "<b>Verify Payment</b> again.",
@@ -708,9 +631,9 @@ async def callback_verify_payment(
 
         return
 
-    # ------------------------------------------
-    # Already completed
-    # ------------------------------------------
+    # ------------------------------------------------------
+    # ALREADY COMPLETED
+    # ------------------------------------------------------
 
     if result.get("already_completed"):
 
@@ -723,9 +646,9 @@ async def callback_verify_payment(
 
         return
 
-    # ------------------------------------------
-    # Get API key
-    # ------------------------------------------
+    # ------------------------------------------------------
+    # GET API KEY
+    # ------------------------------------------------------
 
     raw_key = result.get(
         "api_key"
@@ -749,22 +672,18 @@ async def callback_verify_payment(
 
         return
 
-    # ------------------------------------------
-    # Success
-    # ------------------------------------------
+    # ------------------------------------------------------
+    # SUCCESS
+    # ------------------------------------------------------
 
     await checking_message.edit_text(
         "🎉 <b>Payment Successful!</b>\n\n"
-
         "✅ Subscription activated.\n"
         "🔑 Your API key has been generated.\n\n"
-
         "<b>YOUR API KEY:</b>\n"
         f"<code>{raw_key}</code>\n\n"
-
         "⚠️ <b>Important:</b>\n"
         "Save this API key somewhere safe.\n\n"
-
         "🔐 Do not share your API key publicly.",
         parse_mode="HTML"
     )
@@ -777,7 +696,7 @@ async def callback_verify_payment(
 
 
 # ==========================================================
-# BACKUP: SHOW PLANS FROM ANY PAYMENT SCREEN
+# BACKUP: SHOW PLANS FROM PAYMENT SCREEN
 # ==========================================================
 
 @router.callback_query(
