@@ -2,6 +2,7 @@ import os
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
 
+
 class Settings(BaseSettings):
     API_ID: int
     API_HASH: str
@@ -13,7 +14,10 @@ class Settings(BaseSettings):
     API_PORT: int = 8000
     API_BASE_URL: str
 
-    PAYMENT_PROVIDER: str = "dummy"
+    # ==========================
+    # RAZORPAY
+    # ==========================
+    PAYMENT_PROVIDER: str = "razorpay"
     PAYMENT_API_KEY: Optional[str] = None
     PAYMENT_SECRET: Optional[str] = None
 
@@ -28,5 +32,6 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore"
     )
+
 
 settings = Settings()
