@@ -5,6 +5,8 @@ from database import db
 from services.api_keys import APIKeyService
 from datetime import datetime, timezone
 from handlers.start import get_main_menu_keyboard
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from services.payment import PaymentService
 
 router = Router()
 
@@ -96,3 +98,48 @@ async def callback_support(callback: CallbackQuery):
         parse_mode="HTML"
     )
     await callback.answer()
+
+@router.callback_query(F.data.startswith("buy_plan_"))
+async def callback_buy_plan(callback: CallbackQuery):
+    plan_id = callback.data.replace("buy_plan_", "")
+    user_id = callback.from_user.id
+
+    try:
+        payment_info = await PaymentService.create_payment_order(user_id, plan_id)
+        
+        # In production, send real gateway invoice link. Here we provide a mock pay button for demonstration.
+        text = (
+            f"🛒 <b>Payment Order Created</b>\n\n"
+            f"Plan: <code>{plan_id.upper()}</code>\n"
+            f"Amount: <code>{payment_info['amount']} {payment_info['currency']}</code>\n"
+            f"Payment ID: <code>{payment_info['payment_id']}</code>\n\n"
+            f"<i>Click below to complete your secure payment.</i>"
+        )
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="💳 Pay Now (Mock Gateway)", url=payment_info["checkout_url"])],
+            [InlineKeyboardButton(text="✅ Simulate Successful Payment", callback_data=f"sim_pay_{payment_info['payment_id']}")],
+            [InlineKeyboardButton(text="🔙 Back to Plans", callback_data="menu_plans")]
+        ])
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    except Exception as e:
+        await callback.answer(f"Error creating order: {str(e)}", show_alert=True)
+    await callback.answer()
+
+@router.callback_query(F.data.startswith("sim_pay_"))
+async def callback_simulate_payment(callback: CallbackQuery):
+    payment_id = callback.data.replace("sim_pay_", "")
+    transaction_id = f"TXN_MOCK_{uuid.uuid4().hex[:8].upper()}"
+    
+    success = await PaymentService.verify_and_fulfill_payment(payment_id, transaction_id)
+    if success:
+        key_doc = await APIKeyService.get_active_key_info(callback.from_user.id)
+        text = (
+            f"🎉 <b>Payment Successful & Verified!</b>\n\n"
+            f"Your subscription is now active.\n"
+            f"You can view your API key via <b>🔑 My API Key</b> in the menu."
+        )
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Back to Menu", callback_data="menu_home")]])
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+    else:
+        await callback.answer("Payment verification failed or already processed.", show_alert=True)
+        
