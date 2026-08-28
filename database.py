@@ -11,7 +11,7 @@ db = Database()
 async def connect_to_mongo():
     try:
         db.client = AsyncIOMotorClient(settings.MONGO_DB_URI)
-        db.db = db.client.get_default_database()
+        db.db = db.client["musicbot"]
         
         # Ping check
         await db.client.admin.command('ping')
