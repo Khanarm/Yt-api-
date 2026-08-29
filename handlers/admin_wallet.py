@@ -3,7 +3,7 @@ from aiogram.types import (
     Message,
     CallbackQuery,
     InlineKeyboardMarkup,
-    InlineKeyboardButton
+    InlineKeyboardButton,
 )
 from aiogram.filters import Command
 from datetime import datetime, timezone
@@ -21,24 +21,26 @@ router = Router()
 # ==========================================================
 
 def is_admin(user_id: int) -> bool:
-    admin_ids = getattr(
-        settings,
-        "ADMIN_IDS",
-        []
-    )
+    admin_ids = getattr(settings, "ADMIN_IDS", [])
 
     if isinstance(admin_ids, int):
         admin_ids = [admin_ids]
+
+    if isinstance(admin_ids, str):
+        admin_ids = [
+            int(x.strip())
+            for x in admin_ids.split(",")
+            if x.strip().isdigit()
+        ]
 
     return user_id in admin_ids
 
 
 # ==========================================================
-# FORMAT
+# FORMAT STARS
 # ==========================================================
 
 def format_stars(half_stars: int) -> str:
-
     stars = half_stars / 2
 
     if stars.is_integer():
@@ -48,22 +50,19 @@ def format_stars(half_stars: int) -> str:
 
 
 # ==========================================================
-# PENDING WITHDRAWALS
+# /WITHDRAWALS
+# ADMIN PENDING WITHDRAWAL LIST
 # ==========================================================
 
 @router.message(Command("withdrawals"))
-async def admin_withdrawals(
-    message: Message
-):
+async def admin_withdrawals(message: Message):
 
-    if not is_admin(
-        message.from_user.id
-    ):
+    admin_id = message.from_user.id
 
+    if not is_admin(admin_id):
         await message.answer(
             "❌ You are not authorized."
         )
-
         return
 
     withdrawals = (
@@ -75,30 +74,35 @@ async def admin_withdrawals(
             "created_at",
             1
         )
-        .limit(20)
-        .to_list(
-            length=20
-        )
+        .limit(30)
+        .to_list(length=30)
     )
 
     if not withdrawals:
-
         await message.answer(
             "✅ <b>No pending withdrawals.</b>",
             parse_mode="HTML"
         )
-
         return
+
+    await message.answer(
+        f"💸 <b>Pending Withdrawals: "
+        f"{len(withdrawals)}</b>",
+        parse_mode="HTML"
+    )
 
     for withdrawal in withdrawals:
 
-        withdrawal_id = withdrawal[
+        withdrawal_id = withdrawal.get(
             "withdrawal_id"
-        ]
+        )
 
-        user_id = withdrawal[
-            "user_id"
-        ]
+        user_id = int(
+            withdrawal.get(
+                "user_id",
+                0
+            )
+        )
 
         amount = int(
             withdrawal.get(
@@ -112,42 +116,46 @@ async def admin_withdrawals(
         )
 
         if created_at:
-
-            created_text = (
-                created_at.strftime(
+            try:
+                created_text = created_at.strftime(
                     "%Y-%m-%d %H:%M UTC"
                 )
-            )
-
+            except Exception:
+                created_text = "Unknown"
         else:
-
             created_text = "Unknown"
 
         text = (
-            "💸 <b>Pending Withdrawal</b>\n\n"
-
-            f"🆔 ID:\n"
-            f"<code>{withdrawal_id}</code>\n\n"
+            "💸 <b>Withdrawal Request</b>\n\n"
 
             f"👤 User ID:\n"
             f"<code>{user_id}</code>\n\n"
 
-            f"⭐ Amount: "
-            f"<b>{amount} Stars</b>\n"
+            f"⭐ Amount:\n"
+            f"<b>{amount} Stars</b>\n\n"
 
-            f"🕐 Created: "
-            f"<code>{created_text}</code>\n"
+            f"🆔 Withdrawal ID:\n"
+            f"<code>{withdrawal_id}</code>\n\n"
+
+            f"🕐 Created:\n"
+            f"<code>{created_text}</code>\n\n"
+
+            "⚠️ <b>Important:</b>\n"
+            "First manually send the Stars to the user.\n"
+            "Then press <b>I Have Paid</b>."
         )
 
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[
                 [
                     InlineKeyboardButton(
-                        text="✅ Approve",
+                        text="⭐ I Have Paid",
                         callback_data=(
-                            f"wd_approve_{withdrawal_id}"
+                            f"wd_paid_{withdrawal_id}"
                         )
-                    ),
+                    )
+                ],
+                [
                     InlineKeyboardButton(
                         text="❌ Reject",
                         callback_data=(
@@ -166,29 +174,28 @@ async def admin_withdrawals(
 
 
 # ==========================================================
-# APPROVE WITHDRAWAL
+# STEP 1
+# ADMIN PRESSES "I HAVE PAID"
 # ==========================================================
 
 @router.callback_query(
-    F.data.startswith("wd_approve_")
+    F.data.startswith("wd_paid_")
 )
-async def approve_withdrawal(
+async def withdrawal_paid_step_one(
     callback: CallbackQuery
 ):
 
-    if not is_admin(
-        callback.from_user.id
-    ):
+    admin_id = callback.from_user.id
 
+    if not is_admin(admin_id):
         await callback.answer(
             "❌ Unauthorized.",
             show_alert=True
         )
-
         return
 
     withdrawal_id = callback.data.replace(
-        "wd_approve_",
+        "wd_paid_",
         "",
         1
     )
@@ -198,25 +205,26 @@ async def approve_withdrawal(
     })
 
     if not withdrawal:
-
         await callback.answer(
             "❌ Withdrawal not found.",
             show_alert=True
         )
-
         return
 
-    if withdrawal.get("status") != "pending":
+    status = withdrawal.get("status")
 
+    if status != "pending":
         await callback.answer(
-            "⚠️ This withdrawal is already processed.",
+            f"⚠️ Already processed: {status}",
             show_alert=True
         )
-
         return
 
     user_id = int(
-        withdrawal["user_id"]
+        withdrawal.get(
+            "user_id",
+            0
+        )
     )
 
     amount = int(
@@ -226,15 +234,253 @@ async def approve_withdrawal(
         )
     )
 
+    # ======================================================
+    # STEP 2 CONFIRMATION SCREEN
+    # ======================================================
+
+    text = (
+        "⚠️ <b>Confirm Withdrawal Payment</b>\n\n"
+
+        f"👤 User ID:\n"
+        f"<code>{user_id}</code>\n\n"
+
+        f"⭐ Amount:\n"
+        f"<b>{amount} Stars</b>\n\n"
+
+        f"🆔 Withdrawal ID:\n"
+        f"<code>{withdrawal_id}</code>\n\n"
+
+        "Have you <b>already manually sent</b> "
+        f"<b>{amount} Stars</b> to this user?\n\n"
+
+        "⚠️ Press <b>Yes, Approve</b> ONLY after "
+        "you have actually sent the Stars."
+    )
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Yes, Approve",
+                    callback_data=(
+                        f"wd_confirm_{withdrawal_id}"
+                    )
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="↩️ Back",
+                    callback_data=(
+                        f"wd_back_{withdrawal_id}"
+                    )
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="❌ Reject",
+                    callback_data=(
+                        f"wd_reject_{withdrawal_id}"
+                    )
+                )
+            ]
+        ]
+    )
+
+    await callback.message.edit_text(
+        text,
+        reply_markup=keyboard,
+        parse_mode="HTML"
+    )
+
+    await callback.answer()
+
+
+# ==========================================================
+# BACK FROM CONFIRMATION
+# ==========================================================
+
+@router.callback_query(
+    F.data.startswith("wd_back_")
+)
+async def withdrawal_back(
+    callback: CallbackQuery
+):
+
+    admin_id = callback.from_user.id
+
+    if not is_admin(admin_id):
+        await callback.answer(
+            "❌ Unauthorized.",
+            show_alert=True
+        )
+        return
+
+    withdrawal_id = callback.data.replace(
+        "wd_back_",
+        "",
+        1
+    )
+
+    withdrawal = await db.db.withdrawals.find_one({
+        "withdrawal_id": withdrawal_id
+    })
+
+    if not withdrawal:
+        await callback.answer(
+            "❌ Withdrawal not found.",
+            show_alert=True
+        )
+        return
+
+    if withdrawal.get("status") != "pending":
+        await callback.answer(
+            "⚠️ This request is already processed.",
+            show_alert=True
+        )
+        return
+
+    user_id = int(
+        withdrawal.get(
+            "user_id",
+            0
+        )
+    )
+
+    amount = int(
+        withdrawal.get(
+            "amount_stars",
+            0
+        )
+    )
+
+    text = (
+        "💸 <b>Withdrawal Request</b>\n\n"
+
+        f"👤 User ID:\n"
+        f"<code>{user_id}</code>\n\n"
+
+        f"⭐ Amount:\n"
+        f"<b>{amount} Stars</b>\n\n"
+
+        f"🆔 Withdrawal ID:\n"
+        f"<code>{withdrawal_id}</code>\n\n"
+
+        "⚠️ First manually send the Stars "
+        "to the user."
+    )
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="⭐ I Have Paid",
+                    callback_data=(
+                        f"wd_paid_{withdrawal_id}"
+                    )
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="❌ Reject",
+                    callback_data=(
+                        f"wd_reject_{withdrawal_id}"
+                    )
+                )
+            ]
+        ]
+    )
+
+    await callback.message.edit_text(
+        text,
+        reply_markup=keyboard,
+        parse_mode="HTML"
+    )
+
+    await callback.answer()
+
+
+# ==========================================================
+# FINAL APPROVAL
+# ==========================================================
+
+@router.callback_query(
+    F.data.startswith("wd_confirm_")
+)
+async def withdrawal_final_approval(
+    callback: CallbackQuery
+):
+
+    admin_id = callback.from_user.id
+
+    if not is_admin(admin_id):
+        await callback.answer(
+            "❌ Unauthorized.",
+            show_alert=True
+        )
+        return
+
+    withdrawal_id = callback.data.replace(
+        "wd_confirm_",
+        "",
+        1
+    )
+
+    withdrawal = await db.db.withdrawals.find_one({
+        "withdrawal_id": withdrawal_id
+    })
+
+    if not withdrawal:
+        await callback.answer(
+            "❌ Withdrawal not found.",
+            show_alert=True
+        )
+        return
+
+    # ======================================================
+    # IMPORTANT:
+    # ONLY PENDING REQUEST CAN BE APPROVED
+    # ======================================================
+
+    if withdrawal.get("status") != "pending":
+
+        await callback.answer(
+            "⚠️ This withdrawal has already been processed.",
+            show_alert=True
+        )
+
+        return
+
+    user_id = int(
+        withdrawal.get(
+            "user_id",
+            0
+        )
+    )
+
+    amount = int(
+        withdrawal.get(
+            "amount_stars",
+            0
+        )
+    )
+
+    amount_half = int(
+        withdrawal.get(
+            "amount_half_stars",
+            amount * 2
+        )
+    )
+
     now = datetime.now(timezone.utc)
 
     # ======================================================
-    # ATOMIC STATUS CHANGE
+    # ATOMIC APPROVAL
     # ======================================================
 
     result = await db.db.withdrawals.update_one(
         {
             "withdrawal_id": withdrawal_id,
+
             "status": "pending"
         },
         {
@@ -243,11 +489,12 @@ async def approve_withdrawal(
 
                 "processed_at": now,
 
-                "processed_by":
-                    callback.from_user.id,
+                "processed_by": admin_id,
 
-                "note":
-                    "Withdrawal approved"
+                "note": (
+                    "Admin manually paid Stars "
+                    "and confirmed payment."
+                )
             }
         }
     )
@@ -255,20 +502,19 @@ async def approve_withdrawal(
     if result.modified_count != 1:
 
         await callback.answer(
-            "⚠️ Already processed.",
+            "⚠️ Already processed by another action.",
             show_alert=True
         )
 
         return
 
     # ======================================================
-    # UPDATE LEDGER
+    # UPDATE WALLET LEDGER
     # ======================================================
 
     await db.db.wallet_transactions.update_one(
         {
-            "transaction_id":
-                withdrawal_id
+            "transaction_id": withdrawal_id
         },
         {
             "$set": {
@@ -276,29 +522,31 @@ async def approve_withdrawal(
 
                 "processed_at": now,
 
-                "processed_by":
-                    callback.from_user.id
+                "processed_by": admin_id
             }
         }
     )
 
     # ======================================================
-    # ADMIN MESSAGE
+    # ADMIN SCREEN
     # ======================================================
 
     await callback.message.edit_text(
         "✅ <b>Withdrawal Approved</b>\n\n"
 
-        f"🆔 <code>{withdrawal_id}</code>\n"
         f"👤 User: <code>{user_id}</code>\n"
-        f"⭐ Amount: <b>{amount} Stars</b>\n\n"
+        f"⭐ Amount: <b>{amount} Stars</b>\n"
+        f"🆔 ID: <code>{withdrawal_id}</code>\n\n"
 
-        "Status: <b>PAID</b>",
+        "📌 Status: <b>PAID</b>\n\n"
+
+        "The admin confirmed that the Stars "
+        "were manually sent to the user.",
         parse_mode="HTML"
     )
 
     await callback.answer(
-        "Withdrawal approved."
+        "✅ Withdrawal marked as PAID."
     )
 
     # ======================================================
@@ -310,19 +558,20 @@ async def approve_withdrawal(
         await callback.bot.send_message(
             user_id,
 
-            "🎉 <b>Withdrawal Approved</b>\n\n"
+            "🎉 <b>Withdrawal Completed</b>\n\n"
 
             f"⭐ Amount: <b>{amount} Stars</b>\n"
             f"🆔 ID: <code>{withdrawal_id}</code>\n\n"
 
-            "Your withdrawal has been approved.",
+            "Your withdrawal has been approved "
+            "by the admin.",
             parse_mode="HTML"
         )
 
     except Exception as e:
 
         logger.warning(
-            "Could not notify user %s: %s",
+            "Failed to notify user %s: %s",
             user_id,
             e
         )
@@ -335,19 +584,17 @@ async def approve_withdrawal(
 @router.callback_query(
     F.data.startswith("wd_reject_")
 )
-async def reject_withdrawal(
+async def withdrawal_reject(
     callback: CallbackQuery
 ):
 
-    if not is_admin(
-        callback.from_user.id
-    ):
+    admin_id = callback.from_user.id
 
+    if not is_admin(admin_id):
         await callback.answer(
             "❌ Unauthorized.",
             show_alert=True
         )
-
         return
 
     withdrawal_id = callback.data.replace(
@@ -379,7 +626,10 @@ async def reject_withdrawal(
         return
 
     user_id = int(
-        withdrawal["user_id"]
+        withdrawal.get(
+            "user_id",
+            0
+        )
     )
 
     amount_half = int(
@@ -396,12 +646,13 @@ async def reject_withdrawal(
     now = datetime.now(timezone.utc)
 
     # ======================================================
-    # ATOMIC STATUS CHANGE
+    # ATOMIC REJECTION
     # ======================================================
 
     result = await db.db.withdrawals.update_one(
         {
             "withdrawal_id": withdrawal_id,
+
             "status": "pending"
         },
         {
@@ -410,11 +661,9 @@ async def reject_withdrawal(
 
                 "processed_at": now,
 
-                "processed_by":
-                    callback.from_user.id,
+                "processed_by": admin_id,
 
-                "note":
-                    "Withdrawal rejected"
+                "note": "Withdrawal rejected by admin."
             }
         }
     )
@@ -429,7 +678,7 @@ async def reject_withdrawal(
         return
 
     # ======================================================
-    # REFUND WALLET
+    # REFUND USER WALLET
     # ======================================================
 
     await db.db.users.update_one(
@@ -445,7 +694,7 @@ async def reject_withdrawal(
     )
 
     # ======================================================
-    # UPDATE LEDGER
+    # UPDATE ORIGINAL LEDGER
     # ======================================================
 
     await db.db.wallet_transactions.update_one(
@@ -455,19 +704,19 @@ async def reject_withdrawal(
         },
         {
             "$set": {
-                "status":
-                    "refunded",
+                "status": "refunded",
 
-                "processed_at":
-                    now,
+                "processed_at": now,
 
-                "processed_by":
-                    callback.from_user.id
+                "processed_by": admin_id
             }
         }
     )
 
-    # Add refund ledger
+    # ======================================================
+    # REFUND LEDGER
+    # ======================================================
+
     await db.db.wallet_transactions.insert_one({
         "transaction_id":
             f"REFUND_{withdrawal_id}",
@@ -498,17 +747,17 @@ async def reject_withdrawal(
     await callback.message.edit_text(
         "❌ <b>Withdrawal Rejected</b>\n\n"
 
-        f"🆔 <code>{withdrawal_id}</code>\n"
         f"👤 User: <code>{user_id}</code>\n"
-        f"⭐ Refunded: <b>{amount} Stars</b>\n\n"
+        f"⭐ Refunded: <b>{amount} Stars</b>\n"
+        f"🆔 ID: <code>{withdrawal_id}</code>\n\n"
 
-        "The amount has been returned to "
-        "the user's wallet.",
+        "The Stars have been returned "
+        "to the user's wallet.",
         parse_mode="HTML"
     )
 
     await callback.answer(
-        "Withdrawal rejected and refunded."
+        "❌ Rejected and refunded."
     )
 
     # ======================================================
@@ -522,8 +771,7 @@ async def reject_withdrawal(
 
             "❌ <b>Withdrawal Rejected</b>\n\n"
 
-            f"⭐ Amount refunded: "
-            f"<b>{amount} Stars</b>\n"
+            f"⭐ Refunded: <b>{amount} Stars</b>\n"
             f"🆔 ID: <code>{withdrawal_id}</code>\n\n"
 
             "The amount has been returned "
@@ -534,7 +782,7 @@ async def reject_withdrawal(
     except Exception as e:
 
         logger.warning(
-            "Could not notify user %s: %s",
+            "Failed to notify user %s: %s",
             user_id,
             e
         )
