@@ -3,7 +3,6 @@ import asyncio
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-
 from config import settings
 from database import (
     connect_to_mongo,
@@ -17,6 +16,7 @@ from utils.logger import logger
 
 from handlers import (
     start,
+    menu,
     plans,
     api_key,
     subscription,
@@ -56,6 +56,8 @@ async def main():
     # ======================================================
 
     dp.include_router(start.router)
+
+    dp.include_router(menu.router)
 
     dp.include_router(plans.router)
 
