@@ -8,6 +8,7 @@ from config import settings
 from database import connect_to_mongo, close_mongo_connection
 from utils.logger import logger
 from handlers import start, plans, api_key, subscription, admin
+from handlers.admin_wallet import router as admin_wallet_router
 
 async def main():
     logger.info("Connecting to MongoDB for Telegram Bot...")
@@ -25,6 +26,7 @@ async def main():
     dp.include_router(api_key.router)
     dp.include_router(subscription.router)
     dp.include_router(admin.router)
+    dp.include_router(admin_wallet_router)
 
     logger.info("Starting Telegram Bot Polling...")
     try:
