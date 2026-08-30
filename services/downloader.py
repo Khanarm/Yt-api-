@@ -1,89 +1,204 @@
-import os
-import asyncio
-import yt_dlp
-from fastapi import HTTPException
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, Query, Request, Depends
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+from starlette.background import BackgroundTask
+
 from config import settings
+from database import connect_to_mongo, close_mongo_connection
+from middleware.auth import verify_api_request
+from services.downloader import DownloadService
 from utils.logger import logger
 
-class DownloadService:
-    # Semaphore to limit concurrent downloads and prevent resource exhaustion
-    semaphore = asyncio.Semaphore(3)
 
-    @staticmethod
-    def ensure_download_dir():
-        if not os.path.exists(settings.DOWNLOAD_DIR):
-            os.makedirs(settings.DOWNLOAD_DIR, exist_ok=True)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("Starting REST API Server...")
 
-    @classmethod
-    async def process_download(cls, url: str, download_type: str) -> dict:
-        cls.ensure_download_dir()
-        
-        # Format video identifier / URL
-        if not url.startswith("http"):
-            target_url = f"https://www.youtube.com/watch?v={url}"
-        else:
-            target_url = url
+    await connect_to_mongo()
 
-        async with cls.semaphore:
-            loop = asyncio.get_running_loop()
-            try:
-                result = await loop.run_in_executor(
-                    None, 
-                    cls._extract_and_download, 
-                    target_url, 
-                    download_type
-                )
-                return result
-            except Exception as e:
-                logger.error(f"Download execution error for {target_url}: {e}")
-                raise HTTPException(
-                    status_code=500,
-                    detail={"success": False, "error": "DOWNLOAD_SERVICE_ERROR", "message": str(e)}
-                )
+    yield
 
-    @staticmethod
-    def _extract_and_download(target_url: str, download_type: str) -> dict:
-        output_template = os.path.join(settings.DOWNLOAD_DIR, "%(id)s.%(ext)s")
-        
-        if download_type == "audio":
-            ydl_opts = {
-                'format': 'bestaudio/best',
-                'postprocessors': [{
-                    'key': 'FFmpegExtractAudio',
-                    'preferredcodec': 'mp3',
-                    'preferredquality': '192',
-                }],
-                'outtmpl': output_template,
-                'quiet': True,
-                'no_warnings': True,
+    logger.info("Shutting down REST API Server...")
+
+    await close_mongo_connection()
+
+
+app = FastAPI(
+    title="Music Bot API",
+    version="2.0.0",
+    docs_url=None,
+    redoc_url=None,
+    lifespan=lifespan,
+)
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.get("/")
+async def home():
+    return {
+        "success": True,
+        "name": "Music Bot API",
+        "version": "2.0.0",
+        "status": "online",
+        "docs": "/docs",
+        "health": "/health",
+    }
+
+
+@app.get("/health")
+async def health_check():
+    return {
+        "success": True,
+        "status": "ok",
+    }
+
+
+@app.get("/download")
+async def download_media(
+    request: Request,
+    url: str = Query(
+        ...,
+        description="YouTube video ID or supported URL",
+    ),
+    type: str = Query(
+        ...,
+        pattern="^(audio|video)$",
+        description="audio or video",
+    ),
+    api_key: str = Query(
+        ...,
+        description="Your API key",
+    ),
+    key_doc: dict = Depends(verify_api_request),
+):
+    """
+    Download endpoint compatible with the Telegram Music Bot.
+
+    The important difference from the old version:
+    This endpoint returns the actual media file instead of JSON.
+    """
+
+    try:
+        result = await DownloadService.process_download(
+            url=url,
+            download_type=type,
+        )
+
+        file_path = result["file_path"]
+        media_type = result["media_type"]
+        filename = result["filename"]
+
+        logger.info(
+            f"Sending file: {filename} | "
+            f"user={key_doc.get('user_id')}"
+        )
+
+        return FileResponse(
+            path=file_path,
+            media_type=media_type,
+            filename=filename,
+            background=BackgroundTask(
+                DownloadService.cleanup_file,
+                file_path,
+            ),
+        )
+
+    except Exception as e:
+        logger.error(f"Download endpoint error: {e}")
+
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "error": "DOWNLOAD_SERVICE_ERROR",
+                "message": str(e),
+            },
+        )
+
+
+@app.get("/info")
+async def api_info():
+    return {
+        "success": True,
+        "name": "Music Bot API",
+        "version": "2.0.0",
+        "endpoints": {
+            "health": "/health",
+            "download": "/download",
+            "docs": "/docs",
+        },
+    }
+
+
+@app.get("/docs")
+async def api_documentation():
+    base_url = getattr(
+        settings,
+        "API_BASE_URL",
+        "",
+    ).rstrip("/")
+
+    return {
+        "success": True,
+        "title": "Music Bot API Documentation",
+        "version": "2.0.0",
+        "base_url": base_url,
+
+        "authentication": {
+            "type": "query",
+            "parameter": "api_key",
+            "example": "MSP_YOUR_API_KEY",
+        },
+
+        "endpoints": {
+            "/download": {
+                "method": "GET",
+                "description": (
+                    "Downloads permitted media and returns "
+                    "the actual media file."
+                ),
+
+                "parameters": {
+                    "url": "Required - video ID or supported URL",
+                    "type": "Required - audio or video",
+                    "api_key": "Required - active API key",
+                },
+
+                "example": {
+                    "audio": (
+                        f"{base_url}/download"
+                        "?url=VIDEO_ID"
+                        "&type=audio"
+                        "&api_key=MSP_YOUR_KEY"
+                    ),
+                    "video": (
+                        f"{base_url}/download"
+                        "?url=VIDEO_ID"
+                        "&type=video"
+                        "&api_key=MSP_YOUR_KEY"
+                    ),
+                },
+
+                "response": (
+                    "Binary audio/video file"
+                ),
             }
-        elif download_type == "video":
-            ydl_opts = {
-                'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-                'outtmpl': output_template,
-                'quiet': True,
-                'no_warnings': True,
-            }
-        else:
-            raise ValueError("Invalid download type. Must be 'audio' or 'video'.")
+        },
 
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            try:
-                info = ydl.extract_info(target_url, download=True)
-                file_id = info.get("id")
-                ext = "mp3" if download_type == "audio" else "mp4"
-                file_path = os.path.join(settings.DOWNLOAD_DIR, f"{file_id}.{ext}")
-                
-                # In a complete architecture, you can either stream this file, 
-                # upload it to a CDN/storage, or return the local file path/accessible URL.
-                # Here we return the metadata package matching your required JSON interface.
-                return {
-                    "url": target_url,
-                    "type": download_type,
-                    "file_id": file_id,
-                    "title": info.get("title"),
-                    "duration": info.get("duration"),
-                    "file_path": file_path
-                }
-            except Exception as e:
-                raise RuntimeError(f"yt-dlp failed: {str(e)}")
+        "errors": {
+            "400": "INVALID_PARAMETERS",
+            "401": "MISSING_API_KEY / INVALID_API_KEY",
+            "403": "SUBSCRIPTION_EXPIRED",
+            "429": "REQUEST_LIMIT_EXCEEDED",
+            "500": "DOWNLOAD_SERVICE_ERROR",
+        },
+    }
