@@ -15,7 +15,7 @@ pydantic-settings==2.5.0
 python-dotenv==1.0.1
 
 # Media
-yt-dlp==2024.9.27
+yt-dlp==2024.8.19
 
 # File handling
 aiofiles==24.1.0
