@@ -1,31 +1,37 @@
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Depends, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, Query, Request, Depends
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.background import BackgroundTask
 
 from config import settings
-from database import connect_to_mongo, close_mongo_connection, db
+from database import connect_to_mongo, close_mongo_connection
 from middleware.auth import verify_api_request
 from services.downloader import DownloadService
 from utils.logger import logger
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup tasks
     logger.info("Starting REST API Server...")
+
     await connect_to_mongo()
+
     yield
-    # Shutdown tasks
+
     logger.info("Shutting down REST API Server...")
+
     await close_mongo_connection()
 
+
 app = FastAPI(
-    title="Music Bot API Service",
-    version="1.0.0",
-    docs_url=None, # Custom docs handled below
+    title="Music Bot API",
+    version="2.0.0",
+    docs_url=None,
     redoc_url=None,
-    lifespan=lifespan
+    lifespan=lifespan,
 )
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -35,69 +41,164 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.get("/")
+async def home():
+    return {
+        "success": True,
+        "name": "Music Bot API",
+        "version": "2.0.0",
+        "status": "online",
+        "docs": "/docs",
+        "health": "/health",
+    }
+
+
 @app.get("/health")
 async def health_check():
-    return {"status": "ok"}
+    return {
+        "success": True,
+        "status": "ok",
+    }
+
 
 @app.get("/download")
 async def download_media(
     request: Request,
-    url: str = Query(..., description="YouTube Video ID or direct URL"),
-    type: str = Query(..., regex="^(audio|video)$", description="Type of download: audio or video"),
-    api_key: str = Query(..., description="User API Key")
+    url: str = Query(
+        ...,
+        description="YouTube video ID or supported URL",
+    ),
+    type: str = Query(
+        ...,
+        pattern="^(audio|video)$",
+        description="audio or video",
+    ),
+    api_key: str = Query(
+        ...,
+        description="Your API key",
+    ),
+    key_doc: dict = Depends(verify_api_request),
 ):
-    """Compatible download endpoint for the existing Music Bot."""
-    # Validate API key via middleware dependency logic
-    key_doc = await verify_api_request(request)
-    
-    # Execute download extraction via service
-    download_result = await DownloadService.process_download(url, type)
-    
-    return JSONResponse(
-        status_code=200,
-        content={
-            "success": True,
-            "message": "Download completed",
-            "data": {
-                "url": download_result["url"],
-                "type": download_result["type"],
-                "title": download_result.get("title"),
-                "duration": download_result.get("duration")
-            }
-        }
-    )
+    """
+    Download endpoint compatible with the Telegram Music Bot.
+
+    The important difference from the old version:
+    This endpoint returns the actual media file instead of JSON.
+    """
+
+    try:
+        result = await DownloadService.process_download(
+            url=url,
+            download_type=type,
+        )
+
+        file_path = result["file_path"]
+        media_type = result["media_type"]
+        filename = result["filename"]
+
+        logger.info(
+            f"Sending file: {filename} | "
+            f"user={key_doc.get('user_id')}"
+        )
+
+        return FileResponse(
+            path=file_path,
+            media_type=media_type,
+            filename=filename,
+            background=BackgroundTask(
+                DownloadService.cleanup_file,
+                file_path,
+            ),
+        )
+
+    except Exception as e:
+        logger.error(f"Download endpoint error: {e}")
+
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "error": "DOWNLOAD_SERVICE_ERROR",
+                "message": str(e),
+            },
+        )
+
+
+@app.get("/info")
+async def api_info():
+    return {
+        "success": True,
+        "name": "Music Bot API",
+        "version": "2.0.0",
+        "endpoints": {
+            "health": "/health",
+            "download": "/download",
+            "docs": "/docs",
+        },
+    }
+
 
 @app.get("/docs")
 async def api_documentation():
-    """Custom API Documentation endpoint."""
+    base_url = getattr(
+        settings,
+        "API_BASE_URL",
+        "",
+    ).rstrip("/")
+
     return {
+        "success": True,
         "title": "Music Bot API Documentation",
-        "base_url": settings.API_BASE_URL,
+        "version": "2.0.0",
+        "base_url": base_url,
+
         "authentication": {
-            "type": "Query Parameter",
-            "parameter_name": "api_key",
-            "description": "Pass your secure API key (starting with MSP_) as a query parameter."
+            "type": "query",
+            "parameter": "api_key",
+            "example": "MSP_YOUR_API_KEY",
         },
+
         "endpoints": {
             "/download": {
                 "method": "GET",
-                "description": "Downloads or extracts media from a YouTube ID or URL.",
+                "description": (
+                    "Downloads permitted media and returns "
+                    "the actual media file."
+                ),
+
                 "parameters": {
-                    "url": "String (Required) - YouTube Video ID or full link",
-                    "type": "String (Required) - Options: 'audio' or 'video'",
-                    "api_key": "String (Required) - Your active API key"
+                    "url": "Required - video ID or supported URL",
+                    "type": "Required - audio or video",
+                    "api_key": "Required - active API key",
                 },
-                "examples": {
-                    "audio": f"{settings.API_BASE_URL}/download?url=dQw4w9WgXcQ&type=audio&api_key=MSP_YOUR_KEY",
-                    "video": f"{settings.API_BASE_URL}/download?url=dQw4w9WgXcQ&type=video&api_key=MSP_YOUR_KEY"
-                }
+
+                "example": {
+                    "audio": (
+                        f"{base_url}/download"
+                        "?url=VIDEO_ID"
+                        "&type=audio"
+                        "&api_key=MSP_YOUR_KEY"
+                    ),
+                    "video": (
+                        f"{base_url}/download"
+                        "?url=VIDEO_ID"
+                        "&type=video"
+                        "&api_key=MSP_YOUR_KEY"
+                    ),
+                },
+
+                "response": (
+                    "Binary audio/video file"
+                ),
             }
         },
-        "error_responses": {
-            "401": {"success": False, "error": "MISSING_API_KEY or INVALID_API_KEY"},
-            "403": {"success": False, "error": "SUBSCRIPTION_EXPIRED"},
-            "429": {"success": False, "error": "REQUEST_LIMIT_EXCEEDED"},
-            "400": {"success": False, "error": "INVALID_PARAMETERS"},
-            "500": {"success": False, "error": "DOWNLOAD_SERVICE_ERROR"}
-        }
+
+        "errors": {
+            "400": "INVALID_PARAMETERS",
+            "401": "MISSING_API_KEY / INVALID_API_KEY",
+            "403": "SUBSCRIPTION_EXPIRED",
+            "429": "REQUEST_LIMIT_EXCEEDED",
+            "500": "DOWNLOAD_SERVICE_ERROR",
+        },
     }
