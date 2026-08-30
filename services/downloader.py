@@ -1,6 +1,7 @@
 import os
 import asyncio
 import glob
+import tempfile
 
 import yt_dlp
 from fastapi import HTTPException
@@ -23,11 +24,6 @@ class DownloadService:
 
     @staticmethod
     def cleanup_file(file_path: str):
-        """
-        Delete downloaded file after FastAPI
-        has finished sending it to the client.
-        """
-
         try:
             if file_path and os.path.exists(file_path):
                 os.remove(file_path)
@@ -43,11 +39,6 @@ class DownloadService:
 
     @staticmethod
     def normalize_url(url: str) -> str:
-        """
-        Convert a video ID into a YouTube URL.
-
-        Full URLs are kept unchanged.
-        """
 
         url = url.strip()
 
@@ -60,6 +51,7 @@ class DownloadService:
                 },
             )
 
+        # Video ID
         if not url.startswith(("http://", "https://")):
             return (
                 "https://www.youtube.com/watch?v="
@@ -96,6 +88,7 @@ class DownloadService:
             loop = asyncio.get_running_loop()
 
             try:
+
                 result = await loop.run_in_executor(
                     None,
                     cls._extract_and_download,
@@ -124,7 +117,8 @@ class DownloadService:
             except Exception as e:
 
                 logger.error(
-                    f"Download failed: {target_url} | {e}"
+                    f"Download failed: "
+                    f"{target_url} | {e}"
                 )
 
                 raise HTTPException(
@@ -144,56 +138,140 @@ class DownloadService:
 
         download_dir = settings.DOWNLOAD_DIR
 
-        # Unique temporary filename.
+        os.makedirs(
+            download_dir,
+            exist_ok=True,
+        )
+
         output_template = os.path.join(
             download_dir,
             "%(id)s.%(ext)s",
         )
 
+        # ======================================================
+        # COMMON YT-DLP OPTIONS
+        # ======================================================
+
+        ydl_opts = {
+            "outtmpl": output_template,
+
+            "quiet": False,
+            "no_warnings": False,
+
+            "noplaylist": True,
+
+            # Better network behaviour
+            "retries": 3,
+            "fragment_retries": 3,
+
+            "socket_timeout": 30,
+
+            # Do not abort immediately on unavailable formats
+            "ignoreerrors": False,
+
+            # IPv4 is generally more reliable on many servers
+            "forceipv4": True,
+
+            # YouTube extractor configuration
+            "extractor_args": {
+                "youtube": {
+                    "player_client": [
+                        "android",
+                        "web",
+                    ]
+                }
+            },
+        }
+
+        # ======================================================
+        # OPTIONAL COOKIES
+        # ======================================================
+        #
+        # If YT_API_COOKIES_FILE is configured in Railway,
+        # yt-dlp will use that cookies file.
+        #
+        # Example Railway variable:
+        #
+        # YT_API_COOKIES_FILE=/app/cookies.txt
+        #
+        # Do NOT put cookies directly into this Python file.
+        #
+
+        cookies_file = os.environ.get(
+            "YT_API_COOKIES_FILE"
+        )
+
+        if cookies_file:
+            cookies_file = cookies_file.strip()
+
+            if os.path.isfile(cookies_file):
+
+                ydl_opts["cookiefile"] = cookies_file
+
+                logger.info(
+                    "YouTube cookies enabled."
+                )
+
+            else:
+
+                logger.warning(
+                    "YT_API_COOKIES_FILE is set, "
+                    "but file does not exist: "
+                    f"{cookies_file}"
+                )
+
+        # ======================================================
+        # AUDIO
+        # ======================================================
+
         if download_type == "audio":
 
-            ydl_opts = {
-                "format": (
-                    "bestaudio/best"
-                ),
+            ydl_opts.update(
+                {
+                    "format": (
+                        "bestaudio/best"
+                    ),
 
-                "outtmpl": output_template,
+                    "postprocessors": [
+                        {
+                            "key": "FFmpegExtractAudio",
+                            "preferredcodec": "mp3",
+                            "preferredquality": "192",
+                        }
+                    ],
 
-                "postprocessors": [
-                    {
-                        "key": "FFmpegExtractAudio",
-                        "preferredcodec": "mp3",
-                        "preferredquality": "192",
-                    }
-                ],
+                    "keepvideo": False,
+                }
+            )
 
-                "quiet": True,
-                "no_warnings": True,
-
-                # Do not keep extra downloaded fragments.
-                "keepvideo": False,
-
-                "noplaylist": True,
-            }
+        # ======================================================
+        # VIDEO
+        # ======================================================
 
         else:
 
-            ydl_opts = {
-                "format": (
-                    "bestvideo[ext=mp4]+"
-                    "bestaudio[ext=m4a]/"
-                    "best[ext=mp4]/best"
-                ),
+            ydl_opts.update(
+                {
+                    "format": (
+                        "bestvideo[ext=mp4]+"
+                        "bestaudio[ext=m4a]/"
+                        "best[ext=mp4]/"
+                        "best"
+                    ),
 
-                "outtmpl": output_template,
+                    "merge_output_format": "mp4",
+                }
+            )
 
-                "merge_output_format": "mp4",
+        logger.info(
+            f"Starting yt-dlp download | "
+            f"type={download_type} | "
+            f"url={target_url}"
+        )
 
-                "quiet": True,
-                "no_warnings": True,
-
-                "noplaylist": True,
-            }
+        # ======================================================
+        # DOWNLOAD
+        # ======================================================
 
         try:
 
@@ -207,6 +285,7 @@ class DownloadService:
                 )
 
                 if not info:
+
                     raise RuntimeError(
                         "No media information returned."
                     )
@@ -214,6 +293,7 @@ class DownloadService:
                 video_id = info.get("id")
 
                 if not video_id:
+
                     raise RuntimeError(
                         "Could not determine video ID."
                     )
@@ -227,42 +307,31 @@ class DownloadService:
                     "duration"
                 )
 
-                # ------------------------------------------------
-                # Find the actual downloaded file.
-                # This is more reliable than assuming only
-                # <id>.mp3 or <id>.mp4 exists.
-                # ------------------------------------------------
+                # ==================================================
+                # FIND DOWNLOADED FILE
+                # ==================================================
 
-                possible_files = []
+                existing_file = None
 
                 if download_type == "audio":
 
-                    possible_files = [
-                        os.path.join(
-                            download_dir,
-                            f"{video_id}.mp3",
-                        )
-                    ]
+                    expected = os.path.join(
+                        download_dir,
+                        f"{video_id}.mp3",
+                    )
 
                 else:
 
-                    possible_files = [
-                        os.path.join(
-                            download_dir,
-                            f"{video_id}.mp4",
-                        )
-                    ]
+                    expected = os.path.join(
+                        download_dir,
+                        f"{video_id}.mp4",
+                    )
 
-                # If exact path wasn't found, search by ID.
-                existing_file = None
+                if os.path.isfile(expected):
 
-                for file_path in possible_files:
+                    existing_file = expected
 
-                    if os.path.isfile(file_path):
-                        existing_file = file_path
-                        break
-
-                if existing_file is None:
+                else:
 
                     matches = glob.glob(
                         os.path.join(
@@ -271,40 +340,52 @@ class DownloadService:
                         )
                     )
 
-                    # Ignore temporary files.
                     matches = [
                         x
                         for x in matches
                         if os.path.isfile(x)
                         and not x.endswith(
-                            (".part", ".ytdl")
+                            (
+                                ".part",
+                                ".ytdl",
+                            )
                         )
                     ]
 
                     if matches:
+
                         existing_file = max(
                             matches,
                             key=os.path.getmtime,
                         )
 
-                if existing_file is None:
+                if not existing_file:
+
                     raise RuntimeError(
-                        "Downloaded file could not be found."
+                        "Downloaded file could not "
+                        "be found."
                     )
 
-                # ------------------------------------------------
-                # Final filename
-                # ------------------------------------------------
+                # ==================================================
+                # SAFE TELEGRAM FILENAME
+                # ==================================================
+
+                safe_title = str(
+                    title
+                )
 
                 safe_title = (
-                    str(title)
+                    safe_title
                     .replace("/", "_")
                     .replace("\\", "_")
                     .replace("\n", " ")
+                    .replace("\r", " ")
                     .strip()
                 )
 
-                # Prevent excessively long Telegram filename.
+                if not safe_title:
+                    safe_title = video_id
+
                 safe_title = safe_title[:150]
 
                 if download_type == "audio":
@@ -327,6 +408,13 @@ class DownloadService:
                         "video/mp4"
                     )
 
+                logger.info(
+                    f"Download successful | "
+                    f"id={video_id} | "
+                    f"title={title} | "
+                    f"file={existing_file}"
+                )
+
                 return {
                     "success": True,
                     "type": download_type,
@@ -339,10 +427,48 @@ class DownloadService:
                     "source_url": target_url,
                 }
 
+        except yt_dlp.utils.DownloadError as e:
+
+            error_text = str(e)
+
+            logger.error(
+                f"yt-dlp DownloadError | "
+                f"{target_url} | "
+                f"{error_text}"
+            )
+
+            # More useful error messages
+            if "Please sign in" in error_text:
+
+                raise RuntimeError(
+                    "YouTube requires authentication "
+                    "for this video. Configure a valid "
+                    "YouTube cookies file for yt-dlp."
+                )
+
+            if "Sign in to confirm" in error_text:
+
+                raise RuntimeError(
+                    "YouTube bot verification requires "
+                    "authentication. Configure a valid "
+                    "YouTube cookies file for yt-dlp."
+                )
+
+            if "Video unavailable" in error_text:
+
+                raise RuntimeError(
+                    "YouTube video is unavailable."
+                )
+
+            raise RuntimeError(
+                f"yt-dlp failed: {error_text}"
+            )
+
         except Exception as e:
 
             logger.error(
-                f"yt-dlp error: {target_url} | {e}"
+                f"yt-dlp error: "
+                f"{target_url} | {repr(e)}"
             )
 
             raise RuntimeError(
