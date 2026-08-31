@@ -24,4 +24,5 @@ ENV PORT=8000
 EXPOSE 8000
 
 # Start API and Telegram Bot
-CMD ["sh", "-c", "python -m uvicorn api_server:app --host 0.0.0.0 --port ${PORT:-8000} & python bot.py"]
+
+CMD ["sh", "-c", "if [ -n \"$YT_API_COOKIES_B64\" ]; then printf '%s' \"$YT_API_COOKIES_B64\" | base64 -d > /app/cookies.txt && chmod 600 /app/cookies.txt; fi; python -m uvicorn api_server:app --host 0.0.0.0 --port ${PORT:-8000} & python bot.py"]
