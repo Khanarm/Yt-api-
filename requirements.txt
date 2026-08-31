@@ -16,6 +16,7 @@ python-dotenv==1.0.1
 
 # Media
 yt-dlp[default,curl-cffi]
+bgutil-ytdlp-pot-provider
 
 # File handling
 aiofiles==24.1.0
