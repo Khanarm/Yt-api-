@@ -1,72 +1,215 @@
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import (
+    Message,
+    CallbackQuery,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+)
 from aiogram.filters import Command
-from database import db
+
 from services.api_keys import APIKeyService
-from handlers.start import get_main_menu_keyboard
-from datetime import datetime, timezone
 
 router = Router()
 
+
+# ==========================================================
+# /MYKEY
+# ==========================================================
+
 @router.message(Command("mykey"))
 async def cmd_mykey(message: Message):
-    await show_user_key(message.from_user.id, message)
+    await show_user_key(
+        user_id=message.from_user.id,
+        message=message,
+        edit=False,
+    )
+
+
+# ==========================================================
+# MY API KEY BUTTON
+# ==========================================================
 
 @router.callback_query(F.data == "menu_mykey")
 async def callback_mykey(callback: CallbackQuery):
-    await show_user_key(callback.from_user.id, callback.message, edit=True)
+
+    await show_user_key(
+        user_id=callback.from_user.id,
+        message=callback.message,
+        edit=True,
+    )
+
     await callback.answer()
 
-async def show_user_key(user_id: int, message: Message, edit: bool = False):
+
+# ==========================================================
+# SHOW ACTIVE PURCHASED API KEY
+# ==========================================================
+
+async def show_user_key(
+    user_id: int,
+    message: Message,
+    edit: bool = False,
+):
+
+    # IMPORTANT:
+    # This only reads the existing active key.
+    # It NEVER generates a new key.
     key_doc = await APIKeyService.get_active_key_info(user_id)
-    
+
+    # ======================================================
+    # NO ACTIVE KEY
+    # ======================================================
+
     if not key_doc:
-        text = "❌ You don't have an active API key. Please purchase a plan using /plans."
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="💎 View Plans", callback_data="menu_plans"), InlineKeyboardButton(text="🔙 Menu", callback_data="menu_home")]])
-    else:
-        # Note: Raw key cannot be recovered if it's already hashed in DB. 
-        # We display the prefix or give an option to regenerate/view if tracked temporarily.
+
         text = (
-            f"🔑 <b>Your Active API Key Info:</b>\n\n"
-            f"Prefix: <code>{key_doc['key_prefix']}...</code>\n"
-            f"Status: <b>{key_doc['status'].upper()}</b>\n"
-            f"Plan ID: <code>{key_doc['plan_id']}</code>\n"
-            f"Requests Used: <code>{key_doc['requests_used']} / {key_doc['request_limit']}</code>\n"
-            f"Expires At: <code>{key_doc['expires_at'].strftime('%Y-%m-%d %H:%M:%S UTC')}</code>\n\n"
-            f"<i>If you lost your full key, you can regenerate it below.</i>"
+            "🔑 <b>My API Key</b>\n\n"
+            "❌ <b>No active API key found.</b>\n\n"
+            "Purchase a plan to get your API key."
         )
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔄 Regenerate Key", callback_data="regenerate_key")],
-            [InlineKeyboardButton(text="🔙 Back to Menu", callback_data="menu_home")]
-        ])
+
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="💎 Buy API",
+                        callback_data="menu_plans",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="🔙 Main Menu",
+                        callback_data="menu_home",
+                    )
+                ],
+            ]
+        )
+
+    # ======================================================
+    # ACTIVE KEY
+    # ======================================================
+
+    else:
+
+        # Get the SAME purchased key.
+        api_key = APIKeyService.get_display_key(key_doc)
+
+        request_limit = int(
+            key_doc.get("request_limit", 0)
+        )
+
+        requests_used = int(
+            key_doc.get("requests_used", 0)
+        )
+
+        # Unlimited plan
+        if request_limit == -1:
+            limit_text = "Unlimited"
+            usage_text = f"{requests_used:,} / Unlimited"
+
+        else:
+            limit_text = f"{request_limit:,}"
+            usage_text = (
+                f"{requests_used:,} / {limit_text}"
+            )
+
+        # ==================================================
+        # EXPIRY
+        # ==================================================
+
+        expires_at = key_doc.get("expires_at")
+
+        if expires_at:
+
+            if expires_at.tzinfo is None:
+                expires_text = expires_at.strftime(
+                    "%d-%m-%Y %H:%M UTC"
+                )
+            else:
+                expires_text = expires_at.strftime(
+                    "%d-%m-%Y %H:%M UTC"
+                )
+
+        else:
+            expires_text = "N/A"
+
+        # ==================================================
+        # API KEY
+        # ==================================================
+
+        if api_key:
+
+            key_text = (
+                f"<code>{api_key}</code>"
+            )
+
+        else:
+
+            key_text = (
+                "❌ <i>This old key cannot be displayed.</i>\n"
+                "Please purchase a new plan to get a "
+                "securely viewable API key."
+            )
+
+        # ==================================================
+        # MESSAGE
+        # ==================================================
+
+        text = (
+            "🔑 <b>My API Key</b>\n\n"
+
+            "🔐 <b>Your Purchased API Key:</b>\n"
+            f"{key_text}\n\n"
+
+            f"📦 <b>Plan:</b> "
+            f"<code>{key_doc.get('plan_id', 'N/A')}</code>\n"
+
+            f"📊 <b>Requests Used:</b> "
+            f"<code>{usage_text}</code>\n"
+
+            f"📅 <b>Expires:</b> "
+            f"<code>{expires_text}</code>\n"
+
+            f"🟢 <b>Status:</b> "
+            f"<code>{str(key_doc.get('status', 'active')).upper()}</code>\n\n"
+
+            "⚠️ <b>Keep your API key private.</b>\n"
+            "Do not share it with anyone.\n\n"
+
+            "ℹ️ Opening this page does NOT generate a new key "
+            "and does NOT reset your request usage."
+        )
+
+        # IMPORTANT:
+        # No Generate Key button.
+        # No Regenerate Key button.
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="🔙 Main Menu",
+                        callback_data="menu_home",
+                    )
+                ]
+            ]
+        )
+
+    # ======================================================
+    # SEND / EDIT
+    # ======================================================
 
     if edit:
-        await message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
+
+        await message.edit_text(
+            text,
+            reply_markup=keyboard,
+            parse_mode="HTML",
+        )
+
     else:
-        await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
 
-@router.callback_query(F.data == "regenerate_key")
-async def callback_regenerate(callback: CallbackQuery):
-    user_id = callback.from_user.id
-    active_key = await APIKeyService.get_active_key_info(user_id)
-    
-    if not active_key:
-        await callback.answer("No active subscription/key found to regenerate.", show_alert=True)
-        return
-
-    # Generate new key using existing plan parameters and expiry
-    raw_key = await APIKeyService.create_api_key(
-        user_id=user_id,
-        plan_id=active_key["plan_id"],
-        request_limit=active_key["request_limit"],
-        expires_at=active_key["expires_at"]
-    )
-
-    text = (
-        f"⚠️ <b>API Key Regenerated Successfully!</b>\n\n"
-        f"Your new API Key:\n<code>{raw_key}</code>\n\n"
-        f"<i>Save this key securely. It will not be shown again in full format!</i>"
-    )
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Back to Menu", callback_data="menu_home")]])
-    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
-    await callback.answer("API key regenerated!")
+        await message.answer(
+            text,
+            reply_markup=keyboard,
+            parse_mode="HTML",
+        )
