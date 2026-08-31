@@ -176,7 +176,6 @@ class DownloadService:
             "extractor_args": {
                 "youtube": {
                     "player_client": [
-                        "android",
                         "web",
                     ]
                 }
